@@ -101,100 +101,163 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // --- STATE: DISCONNECTED (Main Menu) ---
             if (_currentState == ConnectionState.disconnected) ...[
               TextField(
                 controller: _nameController,
                 decoration: const InputDecoration(
                   labelText: "Enter Your Name",
                   border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.wifi_tethering),
-                    label: const Text("Host Game"),
-                    onPressed: () async {
-                      if (_nameController.text.isEmpty) return;
-                      if (await PermissionService.requestBluetoothPermissions()) {
-                        network.hostGameWithCustomName(_nameController.text);
-                      }
-                    },
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.all(16)),
+                      icon: const Icon(Icons.wifi_tethering),
+                      label: const Text("Host Game"),
+                      onPressed: () async {
+                        if (_nameController.text.isEmpty) return;
+                        if (await PermissionService.requestBluetoothPermissions()) {
+                          try {
+                            await network.hostGameWithCustomName(_nameController.text);
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Failed to Host. Are Bluetooth & Location ON? (Emulators will fail here)")),
+                            );
+                          }
+                        }
+                      },
+                    ),
                   ),
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.search),
-                    label: const Text("Scan"),
-                    onPressed: () async {
-                      if (_nameController.text.isEmpty) return;
-                      if (await PermissionService.requestBluetoothPermissions()) {
-                        network.startScanning(_nameController.text);
-                      }
-                    },
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.all(16)),
+                      icon: const Icon(Icons.search),
+                      label: const Text("Find Games"),
+                      onPressed: () async {
+                        if (_nameController.text.isEmpty) return;
+                        if (await PermissionService.requestBluetoothPermissions()) {
+                          try {
+                            await network.startScanning(_nameController.text);
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Failed to Scan. Are Bluetooth & Location ON? (Emulators will fail here)")),
+                            );
+                          }
+                        }
+                      },
+                    ),
                   ),
                 ],
               ),
-            ] else ...[
-              Center(
+            ] 
+            
+            // --- STATE: HOSTING (Waiting for players) ---
+            else if (_currentState == ConnectionState.hosting) ...[
+              Expanded(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 24),
+                      const Text(
+                        "Game Hosted Successfully!",
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "Broadcasting as '${_nameController.text}'\nWaiting for an opponent to connect...",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 16, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 32),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
+                        icon: const Icon(Icons.cancel, color: Colors.white),
+                        label: const Text("Cancel Hosting", style: TextStyle(color: Colors.white)),
+                        onPressed: () => network.disconnect(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ]
+            
+            // --- STATE: SCANNING (Looking for games) ---
+            else if (_currentState == ConnectionState.scanning) ...[
+              const Center(
                 child: Column(
                   children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
+                    LinearProgressIndicator(),
+                    SizedBox(height: 16),
                     Text(
-                      _currentState == ConnectionState.hosting
-                          ? "Hosting as '${_nameController.text}'..."
-                          : "Scanning...",
-                      style: const TextStyle(fontSize: 18),
-                    ),
-                    TextButton(
-                      onPressed: () => network.disconnect(),
-                      child: const Text(
-                        "Cancel",
-                        style: TextStyle(color: Colors.red),
-                      ),
+                      "Radar Active: Looking for nearby games...",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 20),
-              if (_currentState == ConnectionState.scanning)
-                Expanded(
-                  child: StreamBuilder<List<DiscoveredDevice>>(
-                    stream: network.discoveredDevices,
-                    initialData: const [],
-                    builder: (context, snapshot) {
-                      // Using !hasData safely since we hid Flutter's ConnectionState
-                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                        return const Center(child: Text("No games found."));
-                      }
-                      final devices = snapshot.data!;
-                      return ListView.builder(
-                        itemCount: devices.length,
-                        itemBuilder: (context, index) {
-                          final device = devices[index];
-                          return Card(
-                            child: ListTile(
-                              leading: const Icon(Icons.person),
-                              title: Text(device.name),
-                              trailing: ElevatedButton(
-                                onPressed: () => network.requestConnection(
-                                  _nameController.text,
-                                  device.id,
-                                ),
-                                child: const Text("Connect"),
-                              ),
-                            ),
-                          );
-                        },
+              Expanded(
+                child: StreamBuilder<List<DiscoveredDevice>>(
+                  stream: network.discoveredDevices,
+                  initialData: const [],
+                  builder: (context, snapshot) {
+                    final devices = snapshot.data!;
+                    
+                    if (devices.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          "No games found yet.\nKeep waiting or ask your opponent to host.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey, fontSize: 16),
+                        ),
                       );
-                    },
-                  ),
+                    }
+                    
+                    return ListView.builder(
+                      itemCount: devices.length,
+                      itemBuilder: (context, index) {
+                        final device = devices[index];
+                        return Card(
+                          elevation: 4,
+                          margin: const EdgeInsets.symmetric(vertical: 8),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.all(16),
+                            leading: const CircleAvatar(child: Icon(Icons.person)),
+                            title: Text(device.name, style: const TextStyle(fontSize: 18)),
+                            subtitle: const Text("Tap connect to send a match request"),
+                            trailing: ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
+                              onPressed: () => network.requestConnection(_nameController.text, device.id),
+                              child: const Text("Connect", style: TextStyle(color: Colors.white)),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 16.0),
+                child: TextButton(
+                  onPressed: () => network.disconnect(),
+                  child: const Text("Stop Scanning", style: TextStyle(color: Colors.red, fontSize: 16)),
+                ),
+              ),
             ],
           ],
         ),
       ),
     );
   }
+
 }
