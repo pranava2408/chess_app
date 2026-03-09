@@ -2,10 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_board/flutter_chess_board.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../main.dart'; 
+import '../../main.dart';
+import 'lobby_screen.dart';
 
 class BoardScreen extends ConsumerStatefulWidget {
-  const BoardScreen({super.key});
+  final bool isHost; // TRUE = White, FALSE = Black
+  const BoardScreen({super.key, required this.isHost});
 
   @override
   ConsumerState<BoardScreen> createState() => _BoardScreenState();
@@ -15,62 +17,85 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   final ChessBoardController controller = ChessBoardController();
   StreamSubscription? _networkSubscription;
 
-  String? selectedSquare;
-  List<String> validMoves = [];
-
-  String _getSquareName(int index) {
-    int fileIndex = index % 8;
-    int rankIndex = 8 - (index ~/ 8);
-    String file = String.fromCharCode(97 + fileIndex); 
-    return "$file$rankIndex";
-  }
-
-  void _handleSquareTap(String squareName) {
-    final game = controller.game;
-
-    setState(() {
-      if (selectedSquare == squareName) {
-        _clearSelection();
-        return;
-      }
-
-      var piece = game.get(squareName);
-
-      if (piece != null && piece.color == game.turn) {
-        selectedSquare = squareName;
-        validMoves = game.generate_moves()
-            .where((move) => move.fromAlgebraic == squareName)
-            .map((move) => move.toAlgebraic as String)
-            .toList();
-      } 
-      else if (selectedSquare != null && validMoves.contains(squareName)) {
-        controller.makeMove(from: selectedSquare!, to: squareName);
-        ref.read(networkProvider).sendMove("${selectedSquare!}$squareName");
-        _clearSelection();
-      } 
-      else {
-        _clearSelection();
-      }
-    });
-  }
-
-  void _clearSelection() {
-    selectedSquare = null;
-    validMoves = [];
-  }
+  // Track if the game is over so we don't spam pop-ups
+  bool _gameOverProcessed = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final network = ref.read(networkProvider);
-      _networkSubscription = network.onMoveReceived.listen((incomingMove) {
-        controller.makeMove(
-          from: incomingMove.substring(0, 2), 
-          to: incomingMove.substring(2, 4)
-        );
+      
+      _networkSubscription = network.onMoveReceived.listen((moveNotation) {
+        if (moveNotation.length >= 4) {
+          String from = moveNotation.substring(0, 2);
+          String to = moveNotation.substring(2, 4);
+          
+          // Handle pawn promotions (e.g., "e7e8q")
+          String? promotion;
+          if (moveNotation.length == 5) {
+            promotion = moveNotation[4];
+          }
+
+          controller.makeMoveWithPromotion(from: from, to: to, pieceToPromoteTo: promotion ?? 'q');
+          _checkGameOver();
+          setState(() {}); // Refresh UI for the turn indicator
+        }
       });
     });
+
+    // Listen to local moves to check for game over and refresh UI
+    controller.addListener(() {
+      if (mounted) {
+        _checkGameOver();
+        setState(() {});
+      }
+    });
+  }
+
+  void _checkGameOver() {
+    if (_gameOverProcessed) return;
+
+    final game = controller.game;
+    String? title;
+    String? message;
+
+    if (game.in_checkmate) {
+      title = "Checkmate!";
+      message = game.turn == Color.WHITE ? "Black wins!" : "White wins!";
+    } else if (game.in_draw) {
+      title = "Draw";
+      message = game.in_stalemate ? "Stalemate." : "Draw by repetition or insufficient material.";
+    }
+
+    if (title != null) {
+      _gameOverProcessed = true;
+      _showGameOverDialog(title, message!);
+    }
+  }
+
+  void _showGameOverDialog(String title, String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              ref.read(networkProvider).disconnect();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LobbyScreen()),
+                (route) => false,
+              );
+            },
+            child: const Text("Return to Lobby"),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -82,85 +107,58 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   @override
   Widget build(BuildContext context) {
     final network = ref.read(networkProvider);
+    
+    // Determine if it's currently this device's turn
+    bool isMyTurn = (controller.game.turn == Color.WHITE && widget.isHost) || 
+                    (controller.game.turn == Color.BLACK && !widget.isHost);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Hybrid Rules Sandbox'),
+        title: Text(isMyTurn ? "Your Turn" : "Waiting for Opponent..."),
+        centerTitle: true,
+        backgroundColor: isMyTurn ? Colors.green.shade800 : Colors.grey.shade800,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.flag), // Resign button
+            tooltip: "Resign",
             onPressed: () {
-              controller.resetBoard();
-              setState(() => _clearSelection());
+              // In a full build, you'd send a "RESIGN" network packet here
+              network.disconnect();
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LobbyScreen()));
             },
-          ),
-        ],
-      ),
-      body: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: AspectRatio(
-              aspectRatio: 1.0, 
-              child: Stack(
-                children: [
-
-                  ChessBoard(
-                    controller: controller,
-                    boardColor: BoardColor.brown,
-                    boardOrientation: PlayerColor.white,
-
-                    onMove: () {
-                      setState(() => _clearSelection());
-                    },
-                  ),
-
-                  GridView.builder(
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 8,
-                    ),
-                    itemCount: 64,
-                    itemBuilder: (context, index) {
-                      String squareName = _getSquareName(index);
-                      bool isSelected = selectedSquare == squareName;
-                      bool isValidMove = validMoves.contains(squareName);
-
-                      return GestureDetector(
-                        behavior: HitTestBehavior.translucent, 
-                        onTap: () => _handleSquareTap(squareName),
-                        child: Container(
-                          color: isSelected 
-                              ? Colors.green.withOpacity(0.5) 
-                              : Colors.transparent,
-                          child: isValidMove 
-                              ? Center(
-                                  child: Container(
-                                    width: 16,
-                                    height: 16,
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.withOpacity(0.7),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                )
-                              : null,
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () => network.hostGame(),
-            child: const Text("Simulate Connecting to Opponent"),
           )
         ],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          // Ignore pointers blocks the user from dragging pieces when it's not their turn
+          child: IgnorePointer(
+            ignoring: !isMyTurn,
+            child: ChessBoard(
+              controller: controller,
+              boardColor: BoardColor.brown,
+              // Flip the board based on who hosted!
+              boardOrientation: widget.isHost ? PlayerColor.white : PlayerColor.black,
+              onMove: () {
+              if (controller.game.history.isNotEmpty) {
+                // Grab the actual move object
+                var lastMove = controller.game.history.last.move;
+                
+                // FIXED: The Dart chess package exposes these directly as strings
+                String from = lastMove.fromAlgebraic;
+                String to = lastMove.toAlgebraic;
+                
+                // Safe promotion handling (defaults to Queen if a promotion occurred)
+                String promotion = lastMove.promotion != null ? 'q' : '';
+                
+                String moveNotation = "$from$to$promotion";
+                network.sendMove(moveNotation);
+              }
+            },
+            ),
+          ),
+        ),
       ),
     );
   }
