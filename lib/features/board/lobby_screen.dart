@@ -112,7 +112,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              Row(
+             Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   Expanded(
@@ -126,9 +126,14 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                           try {
                             await network.hostGameWithCustomName(_nameController.text);
                           } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Failed to Host. Are Bluetooth & Location ON? (Emulators will fail here)")),
-                            );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("Host Error: $e"),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
                           }
                         }
                       },
@@ -146,9 +151,14 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                           try {
                             await network.startScanning(_nameController.text);
                           } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Failed to Scan. Are Bluetooth & Location ON? (Emulators will fail here)")),
-                            );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("Scan Error: $e"),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
                           }
                         }
                       },
