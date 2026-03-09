@@ -6,7 +6,7 @@ import '../../main.dart';
 import 'lobby_screen.dart';
 
 class BoardScreen extends ConsumerStatefulWidget {
-  final bool isHost; // TRUE = White, FALSE = Black
+  final bool isHost; // TRUE = White (Host), FALSE = Black (Joiner)
   const BoardScreen({super.key, required this.isHost});
 
   @override
@@ -16,40 +16,54 @@ class BoardScreen extends ConsumerStatefulWidget {
 class _BoardScreenState extends ConsumerState<BoardScreen> {
   final ChessBoardController controller = ChessBoardController();
   StreamSubscription? _networkSubscription;
-
-  // Track if the game is over so we don't spam pop-ups
   bool _gameOverProcessed = false;
 
   @override
   void initState() {
     super.initState();
+    
+    // Listen for moves from the opponent
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final network = ref.read(networkProvider);
       
       _networkSubscription = network.onMoveReceived.listen((moveNotation) {
+        if (!mounted) return;
+
+        // Check if the opponent resigned
+        if (moveNotation == "RESIGN") {
+          _showGameOverDialog("Opponent Resigned", "You win!");
+          return;
+        }
+
+        // Apply remote move to our board
         if (moveNotation.length >= 4) {
           String from = moveNotation.substring(0, 2);
           String to = moveNotation.substring(2, 4);
-          
-          // Handle pawn promotions (e.g., "e7e8q")
-          String? promotion;
-          if (moveNotation.length == 5) {
-            promotion = moveNotation[4];
-          }
+          String? promotion = moveNotation.length == 5 ? moveNotation[4] : 'q';
 
-          controller.makeMoveWithPromotion(from: from, to: to, pieceToPromoteTo: promotion ?? 'q');
+          controller.makeMoveWithPromotion(
+            from: from, 
+            to: to, 
+            pieceToPromoteTo: promotion
+          );
+          
           _checkGameOver();
-          setState(() {}); // Refresh UI for the turn indicator
+          setState(() {}); // Updates the UI turn indicator
         }
       });
     });
 
-    // Listen to local moves to check for game over and refresh UI
+    // Listen to our own local moves
     controller.addListener(() {
       if (mounted) {
         _checkGameOver();
         setState(() {});
       }
+    });
+
+    // Safety refresh to clear any ghost UI states
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() {});
     });
   }
 
@@ -65,7 +79,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       message = game.turn == Color.WHITE ? "Black wins!" : "White wins!";
     } else if (game.in_draw) {
       title = "Draw";
-      message = game.in_stalemate ? "Stalemate." : "Draw by repetition or insufficient material.";
+      message = "The game ended in a draw.";
     }
 
     if (title != null) {
@@ -91,7 +105,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 (route) => false,
               );
             },
-            child: const Text("Return to Lobby"),
+            child: const Text("Exit to Lobby"),
           ),
         ],
       ),
@@ -108,54 +122,67 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   Widget build(BuildContext context) {
     final network = ref.read(networkProvider);
     
-    // Determine if it's currently this device's turn
-    bool isMyTurn = (controller.game.turn == Color.WHITE && widget.isHost) || 
-                    (controller.game.turn == Color.BLACK && !widget.isHost);
+    // 1. Get the current turn from the chess engine (Color.WHITE or Color.BLACK)
+    final currentTurn = controller.game.turn;
+
+    // 2. Logic: It's your turn if (Engine says White AND you are Host) 
+    // OR (Engine says Black AND you are NOT Host)
+    bool isMyTurn = (currentTurn == Color.WHITE && widget.isHost) || 
+                    (currentTurn == Color.BLACK && !widget.isHost);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(isMyTurn ? "Your Turn" : "Waiting for Opponent..."),
+        title: Column(
+          children: [
+            Text(isMyTurn ? "Your Turn" : "Opponent's Turn", 
+                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            Text(widget.isHost ? "Playing as White" : "Playing as Black", 
+                 style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          ],
+        ),
         centerTitle: true,
-        backgroundColor: isMyTurn ? Colors.green.shade800 : Colors.grey.shade800,
+        backgroundColor: isMyTurn ? Colors.green.shade900 : Colors.blueGrey.shade900,
         actions: [
           IconButton(
-            icon: const Icon(Icons.flag), // Resign button
+            icon: const Icon(Icons.flag),
             tooltip: "Resign",
             onPressed: () {
-              // In a full build, you'd send a "RESIGN" network packet here
+              network.sendMove("RESIGN");
               network.disconnect();
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LobbyScreen()));
+              Navigator.pushReplacement(
+                context, 
+                MaterialPageRoute(builder: (_) => const LobbyScreen())
+              );
             },
           )
         ],
       ),
       body: Center(
         child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          // Ignore pointers blocks the user from dragging pieces when it's not their turn
+          padding: const EdgeInsets.all(16.0),
+          // IgnorePointer prevents you from dragging pieces when it is NOT your turn
           child: IgnorePointer(
             ignoring: !isMyTurn,
             child: ChessBoard(
               controller: controller,
               boardColor: BoardColor.brown,
-              // Flip the board based on who hosted!
               boardOrientation: widget.isHost ? PlayerColor.white : PlayerColor.black,
               onMove: () {
-              if (controller.game.history.isNotEmpty) {
-                // Grab the actual move object
-                var lastMove = controller.game.history.last.move;
-                
-                // FIXED: The Dart chess package exposes these directly as strings
-                String from = lastMove.fromAlgebraic;
-                String to = lastMove.toAlgebraic;
-                
-                // Safe promotion handling (defaults to Queen if a promotion occurred)
-                String promotion = lastMove.promotion != null ? 'q' : '';
-                
-                String moveNotation = "$from$to$promotion";
-                network.sendMove(moveNotation);
-              }
-            },
+                // Only send the move over Bluetooth if YOU actually made it
+                if (isMyTurn && controller.game.history.isNotEmpty) {
+                  var lastMove = controller.game.history.last.move;
+                  
+                  String from = lastMove.fromAlgebraic;
+                  String to = lastMove.toAlgebraic;
+                  String promotion = lastMove.promotion != null ? 'q' : '';
+                  
+                  // Send to opponent
+                  network.sendMove("$from$to$promotion");
+                  
+                  // Instantly switch UI
+                  setState(() {}); 
+                }
+              },
             ),
           ),
         ),

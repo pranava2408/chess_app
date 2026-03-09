@@ -1,5 +1,5 @@
 import 'dart:async';
-// THE MAGIC FIX: Hides Flutter's built-in state to let yours work perfectly
+// Hides Flutter's built-in state to let yours work perfectly
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/permissions.dart';
@@ -20,7 +20,6 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
   StreamSubscription? _connectionSub;
   StreamSubscription? _requestSub;
 
-  // Using YOUR exact state enum without errors
   ConnectionState _currentState = ConnectionState.disconnected;
 
   @override
@@ -31,17 +30,20 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
 
       _connectionSub = network.connectionState.listen((state) {
         if (!mounted) return;
-        setState(() => _currentState = state);
 
         if (state == ConnectionState.connected) {
-          // If we were hosting, we are White. If scanning, we are Black.
-          bool isHost = _currentState == ConnectionState.hosting;
+          // CRITICAL: Decide who is White (Host) before switching screens
+          bool amIWhite = (_currentState == ConnectionState.hosting);
 
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => BoardScreen(isHost: isHost)),
+            MaterialPageRoute(
+              builder: (_) => BoardScreen(isHost: amIWhite),
+            ),
           );
         }
+        
+        setState(() => _currentState = state);
       });
 
       _requestSub = network.incomingRequests.listen((request) {
@@ -51,11 +53,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
     });
   }
 
-  void _showAcceptDialog(
-    String id,
-    String opponentName,
-    BluetoothNetworkService network,
-  ) {
+  void _showAcceptDialog(String id, String opponentName, BluetoothNetworkService network) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -101,7 +99,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // --- STATE: DISCONNECTED (Main Menu) ---
+            // --- STATE: DISCONNECTED ---
             if (_currentState == ConnectionState.disconnected) ...[
               TextField(
                 controller: _nameController,
@@ -112,8 +110,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-             Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
@@ -122,18 +119,16 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       label: const Text("Host Game"),
                       onPressed: () async {
                         if (_nameController.text.isEmpty) return;
-                        if (await PermissionService.requestBluetoothPermissions()) {
-                          try {
-                            await network.hostGameWithCustomName(_nameController.text);
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text("Host Error: $e"),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
+                        
+                        // Ask for permissions, then try to host
+                        await PermissionService.requestBluetoothPermissions();
+                        try {
+                          await network.hostGameWithCustomName(_nameController.text);
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Host Error: $e"), backgroundColor: Colors.red),
+                            );
                           }
                         }
                       },
@@ -147,18 +142,16 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       label: const Text("Find Games"),
                       onPressed: () async {
                         if (_nameController.text.isEmpty) return;
-                        if (await PermissionService.requestBluetoothPermissions()) {
-                          try {
-                            await network.startScanning(_nameController.text);
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text("Scan Error: $e"),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
+                        
+                        // Ask for permissions, then try to scan
+                        await PermissionService.requestBluetoothPermissions();
+                        try {
+                          await network.startScanning(_nameController.text);
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Scan Error: $e"), backgroundColor: Colors.red),
+                            );
                           }
                         }
                       },
@@ -167,8 +160,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 ],
               ),
             ] 
-            
-            // --- STATE: HOSTING (Waiting for players) ---
+            // --- STATE: HOSTING ---
             else if (_currentState == ConnectionState.hosting) ...[
               Expanded(
                 child: Center(
@@ -183,7 +175,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Broadcasting as '${_nameController.text}'\nWaiting for an opponent to connect...",
+                        "Broadcasting as '${_nameController.text}'\nWaiting for an opponent...",
                         textAlign: TextAlign.center,
                         style: const TextStyle(fontSize: 16, color: Colors.grey),
                       ),
@@ -199,8 +191,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 ),
               ),
             ]
-            
-            // --- STATE: SCANNING (Looking for games) ---
+            // --- STATE: SCANNING ---
             else if (_currentState == ConnectionState.scanning) ...[
               const Center(
                 child: Column(
@@ -269,5 +260,4 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
       ),
     );
   }
-
 }
